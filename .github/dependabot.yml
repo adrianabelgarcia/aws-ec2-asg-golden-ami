@@ -7,28 +7,40 @@ updates:
     groups:
       actions:
         patterns: ["*"]
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: gomod
     directory: /app
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: terraform
     directory: /terraform/modules/asg-service
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: terraform
     directory: /terraform/envs/staging
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: terraform
     directory: /terraform/envs/prod
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7
 
   - package-ecosystem: pre-commit
     directory: /
     schedule:
       interval: weekly
+    cooldown:
+      default-days: 7

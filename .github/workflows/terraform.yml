@@ -11,10 +11,8 @@ on:
       - "terraform/**"
       - ".github/workflows/terraform.yml"
 
-permissions:
-  id-token: write
-  contents: read
-  pull-requests: write
+# Least privilege: nothing at workflow level, each job asks only for what it needs.
+permissions: {}
 
 concurrency:
   group: terraform-${{ github.ref }}
@@ -22,7 +20,11 @@ concurrency:
 
 jobs:
   staging:
-    uses: adrianabelgarcia/aws-iac-foundations/.github/workflows/terraform.yml@v1
+    permissions:
+      id-token: write # OIDC to AWS (plan/apply)
+      contents: read
+      pull-requests: write # sticky plan comment
+    uses: adrianabelgarcia/aws-iac-foundations/.github/workflows/terraform.yml@e726b540430d11d706d6d360e371f4a648335c4d # v1
     with:
       working-directory: terraform/envs/staging
       environment: staging
@@ -32,7 +34,11 @@ jobs:
 
   prod:
     needs: staging
-    uses: adrianabelgarcia/aws-iac-foundations/.github/workflows/terraform.yml@v1
+    permissions:
+      id-token: write # OIDC to AWS (plan/apply)
+      contents: read
+      pull-requests: write # sticky plan comment
+    uses: adrianabelgarcia/aws-iac-foundations/.github/workflows/terraform.yml@e726b540430d11d706d6d360e371f4a648335c4d # v1
     with:
       working-directory: terraform/envs/prod
       environment: prod
