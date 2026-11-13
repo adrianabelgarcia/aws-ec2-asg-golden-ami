@@ -1,0 +1,14 @@
+#!/bin/bash
+# Minimal per-instance configuration. The image already contains everything else; this only
+# tells the drain hook which Auto Scaling group and lifecycle hook belong to this instance.
+set -euo pipefail
+
+install -d -m 0755 /etc/sample-app
+cat > /etc/sample-app/instance.env <<'ENV'
+SERVICE_NAME=${service_name}
+ENVIRONMENT=${environment}
+ASG_NAME=${asg_name}
+LIFECYCLE_HOOK_NAME=${lifecycle_hook_name}
+AWS_REGION=${region}
+ENV
+chmod 0644 /etc/sample-app/instance.env

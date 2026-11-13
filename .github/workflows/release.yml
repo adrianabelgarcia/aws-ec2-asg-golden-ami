@@ -1,0 +1,205 @@
+name: release-ami
+
+# Builds, scans and promotes the golden AMI for sample-app.
+#
+# Without AWS repository variables the workflow stops after validation, so it stays green on forks
+# and pull requests. With them, a push to main (or a manual run) builds the AMI in staging, deploys
+# it through the ASG instance refresh, and copies it into production after a manual approval.
+
+on:
+  pull_request:
+    paths:
+      - "app/**"
+      - "packer/**"
+      - "scripts/**"
+      - "Makefile"
+      - ".github/workflows/release.yml"
+      - ".github/actions/deploy-env/**"
+  push:
+    branches: [main]
+    paths:
+      - "app/**"
+      - "packer/**"
+      - "scripts/**"
+      - "Makefile"
+      - ".github/workflows/release.yml"
+      - ".github/actions/deploy-env/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  AWS_REGION: us-east-1
+  SERVICE_NAME: sample-app
+
+jobs:
+  app-test:
+    name: App tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: app/go.mod
+          cache: false
+      - name: gofmt, vet, race tests with coverage
+        run: make app-test
+
+  shell-lint:
+    name: Shell lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - name: shellcheck
+        run: make shellcheck
+
+  packer-validate:
+    name: Packer validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-packer@v3.4.0
+        with:
+          version: "1.16.2"
+      - name: fmt, init, syntax-only validate
+        run: make packer-validate
+
+  build-ami:
+    name: Build golden AMI (staging account)
+    needs: [app-test, shell-lint, packer-validate]
+    if: >-
+      vars.AWS_ROLE_ARN_STAGING != '' &&
+      (github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      id-token: write
+      contents: read
+    outputs:
+      ami_id: ${{ steps.record.outputs.ami_id }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: app/go.mod
+          cache: false
+      - name: Build static application binary
+        run: make app-build GIT_SHA="${GITHUB_SHA}"
+      - name: Install Session Manager plugin (Packer reaches the build instance through it)
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 -o "${RUNNER_TEMP}/session-manager-plugin.deb" \
+            "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb"
+          sudo dpkg -i "${RUNNER_TEMP}/session-manager-plugin.deb"
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_STAGING }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: golden-ami-${{ github.run_id }}
+      - uses: hashicorp/setup-packer@v3.4.0
+        with:
+          version: "1.16.2"
+      - name: Packer build
+        working-directory: packer
+        env:
+          PROD_ACCOUNT_ID: ${{ vars.AWS_ACCOUNT_ID_PROD }}
+        run: |
+          set -euo pipefail
+          packer init .
+          if [[ -n "${PROD_ACCOUNT_ID}" ]]; then
+            ami_users="[\"${PROD_ACCOUNT_ID}\"]"
+          else
+            ami_users="[]"
+          fi
+          packer build -color=false \
+            -var "git_sha=${GITHUB_SHA}" \
+            -var "region=${AWS_REGION}" \
+            -var "kms_key_id=alias/${SERVICE_NAME}-staging-ebs" \
+            -var "ami_users=${ami_users}" \
+            .
+      - name: Record AMI ID from the Packer manifest
+        id: record
+        run: |
+          set -euo pipefail
+          ami_id="$(scripts/extract-ami-id.sh packer/manifest.json)"
+          echo "ami_id=${ami_id}" >> "${GITHUB_OUTPUT}"
+          echo "::notice::built ${ami_id}"
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: golden-ami-build-${{ github.run_id }}
+          path: |
+            packer/manifest.json
+            packer/reports/
+          if-no-files-found: warn
+
+  deploy-staging:
+    name: Deploy staging
+    needs: build-ami
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment: staging
+    concurrency:
+      group: deploy-staging
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - name: Deploy and verify
+        uses: ./.github/actions/deploy-env
+        with:
+          environment: staging
+          ami-id: ${{ needs.build-ami.outputs.ami_id }}
+          aws-role-arn: ${{ vars.AWS_ROLE_ARN_STAGING }}
+          aws-region: ${{ env.AWS_REGION }}
+          service-domain: ${{ vars.SERVICE_DOMAIN_STAGING }}
+          expected-version: ${{ github.sha }}
+
+  promote-prod:
+    name: Copy AMI and deploy production
+    needs: [build-ami, deploy-staging]
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    # Required reviewers on the prod environment make this job wait for a human approval.
+    environment: prod
+    concurrency:
+      group: deploy-prod
+      cancel-in-progress: false
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: ami-copy-${{ github.run_id }}
+      - name: Copy the staging-verified AMI into the production account
+        id: copy
+        env:
+          SOURCE_AMI: ${{ needs.build-ami.outputs.ami_id }}
+        run: |
+          set -euo pipefail
+          prod_ami="$(scripts/copy-ami.sh "${SOURCE_AMI}" "${AWS_REGION}" \
+            "alias/${SERVICE_NAME}-prod-ebs" "${SERVICE_NAME}-${GITHUB_SHA}-prod")"
+          echo "ami_id=${prod_ami}" >> "${GITHUB_OUTPUT}"
+      - name: Deploy and verify
+        uses: ./.github/actions/deploy-env
+        with:
+          environment: prod
+          ami-id: ${{ steps.copy.outputs.ami_id }}
+          aws-role-arn: ${{ vars.AWS_ROLE_ARN_PROD }}
+          aws-region: ${{ env.AWS_REGION }}
+          service-domain: ${{ vars.SERVICE_DOMAIN_PROD }}
+          expected-version: ${{ github.sha }}

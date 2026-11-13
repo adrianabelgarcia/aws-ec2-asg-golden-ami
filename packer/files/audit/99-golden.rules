@@ -1,0 +1,31 @@
+# CIS-aligned audit baseline. Keys are used by the log shipper and by SIEM searches.
+-D
+-b 8192
+-f 1
+
+-w /etc/localtime -p wa -k time-change
+-a always,exit -F arch=b64 -S adjtimex -S settimeofday -S clock_settime -k time-change
+
+-w /etc/group -p wa -k identity
+-w /etc/passwd -p wa -k identity
+-w /etc/gshadow -p wa -k identity
+-w /etc/shadow -p wa -k identity
+
+-w /etc/sudoers -p wa -k scope
+-w /etc/sudoers.d/ -p wa -k scope
+
+-w /var/log/lastlog -p wa -k logins
+-w /var/run/faillock/ -p wa -k logins
+-w /var/log/btmp -p wa -k logins
+-w /var/log/wtmp -p wa -k logins
+-w /var/run/utmp -p wa -k session
+
+-w /etc/ssh/sshd_config -p wa -k sshd
+-w /etc/ssh/sshd_config.d/ -p wa -k sshd
+
+-a always,exit -F arch=b64 -S init_module -S finit_module -S delete_module -k modules
+-a always,exit -F arch=b64 -S mount -F auid>=1000 -F auid!=unset -k mounts
+-a always,exit -F arch=b64 -C euid!=uid -F auid!=unset -S execve -k user_exec
+
+# Immutable rules would block later changes until reboot. The fleet is rebuilt rather than
+# patched in place, so reboots are cheap and the ruleset stays editable at build time.

@@ -1,0 +1,13 @@
+# Checkov policy for every Terraform root and module under terraform/.
+framework:
+  - terraform
+directory:
+  - terraform
+compact: true
+quiet: true
+download-external-modules: false
+soft-fail: false
+skip-path:
+  - "**/.terraform/**"
+output:
+  - cli

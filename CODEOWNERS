@@ -1,0 +1,8 @@
+# Every change needs review from the owner of the affected area.
+*                       @adrianabelgarcia
+/packer/                @adrianabelgarcia
+/app/                   @adrianabelgarcia
+/terraform/             @adrianabelgarcia
+/scripts/               @adrianabelgarcia
+/.github/               @adrianabelgarcia
+/docs/                  @adrianabelgarcia

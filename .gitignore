@@ -1,0 +1,49 @@
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+crash.log
+crash.*.log
+*.tfplan
+tfplan
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+.terraformrc
+terraform.rc
+# Lock files are committed for the environment roots only. The reusable module has none.
+terraform/modules/**/.terraform.lock.hcl
+
+# Packer
+packer/packer_cache/
+packer/manifest.json
+packer/reports/
+*.pkrvars.hcl.local
+
+# Go
+app/bin/
+*.test
+*.out
+coverage.txt
+
+# Secrets and local settings
+.env
+.env.*
+*.pem
+*.key
+.aws/
+.claude/settings.local.json
+
+# Editors and OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# AI assistant / MCP tooling (never committed)
+CLAUDE.md
+.claude/
+.mcp.json
+mcp*.json
+AGENTS.md

@@ -1,0 +1,34 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directory: /app
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: terraform
+    directory: /terraform/modules/asg-service
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: terraform
+    directory: /terraform/envs/staging
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: terraform
+    directory: /terraform/envs/prod
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: pre-commit
+    directory: /
+    schedule:
+      interval: weekly

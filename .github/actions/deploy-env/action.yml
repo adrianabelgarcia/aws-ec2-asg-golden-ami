@@ -1,0 +1,96 @@
+name: Deploy golden AMI to environment
+description: >-
+  Applies the environment root with the given AMI, waits for the resulting instance refresh,
+  runs a smoke test through the ALB, and only then promotes the AMI in SSM Parameter Store.
+
+inputs:
+  environment:
+    description: Environment name, staging or prod. Selects terraform/envs/<environment>.
+    required: true
+  ami-id:
+    description: AMI ID to deploy. Must exist in the account of the target environment.
+    required: true
+  aws-role-arn:
+    description: IAM role assumed through OIDC for the target account.
+    required: true
+  aws-region:
+    description: AWS region of the environment.
+    required: false
+    default: us-east-1
+  service-domain:
+    description: Public domain of the service, used by the smoke test.
+    required: true
+  expected-version:
+    description: Version string the service must report after the rollout.
+    required: true
+  refresh-timeout-seconds:
+    description: How long to wait for the instance refresh to finish.
+    required: false
+    default: "2700"
+
+runs:
+  using: composite
+  steps:
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v4
+      with:
+        terraform_version: 1.12.0
+        terraform_wrapper: false
+
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v6
+      with:
+        role-to-assume: ${{ inputs.aws-role-arn }}
+        aws-region: ${{ inputs.aws-region }}
+        role-session-name: deploy-${{ inputs.environment }}-${{ github.run_id }}
+
+    - name: Terraform apply with the new AMI
+      id: apply
+      shell: bash
+      working-directory: terraform/envs/${{ inputs.environment }}
+      env:
+        AMI_ID: ${{ inputs.ami-id }}
+      run: |
+        set -euo pipefail
+        echo "deploy_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
+        terraform init -input=false -backend-config=backend.hcl
+        terraform plan -input=false -var "ami_id=${AMI_ID}" -out=tfplan
+        terraform apply -input=false tfplan
+
+    - name: Wait for instance refresh
+      shell: bash
+      working-directory: terraform/envs/${{ inputs.environment }}
+      env:
+        STARTED_AT: ${{ steps.apply.outputs.deploy_started_at }}
+        TIMEOUT: ${{ inputs.refresh-timeout-seconds }}
+      run: |
+        set -euo pipefail
+        asg_name="$(terraform output -raw asg_name)"
+        "${GITHUB_WORKSPACE}/scripts/wait-instance-refresh.sh" "${asg_name}" "${TIMEOUT}" "${STARTED_AT}"
+
+    - name: Smoke test through the load balancer
+      shell: bash
+      working-directory: terraform/envs/${{ inputs.environment }}
+      env:
+        SERVICE_DOMAIN: ${{ inputs.service-domain }}
+        EXPECTED_VERSION: ${{ inputs.expected-version }}
+      run: |
+        set -euo pipefail
+        alb_dns="$(terraform output -raw alb_dns_name)"
+        "${GITHUB_WORKSPACE}/scripts/smoke-test.sh" "${SERVICE_DOMAIN}" "${alb_dns}" "${EXPECTED_VERSION}"
+
+    - name: Promote AMI for future Terraform runs
+      shell: bash
+      working-directory: terraform/envs/${{ inputs.environment }}
+      env:
+        AMI_ID: ${{ inputs.ami-id }}
+      run: |
+        set -euo pipefail
+        parameter_name="$(terraform output -raw ami_ssm_parameter_name)"
+        aws ssm put-parameter \
+          --region "${{ inputs.aws-region }}" \
+          --name "${parameter_name}" \
+          --type String \
+          --overwrite \
+          --value "${AMI_ID}" >/dev/null
+        echo "promoted ${AMI_ID} to ${parameter_name}"

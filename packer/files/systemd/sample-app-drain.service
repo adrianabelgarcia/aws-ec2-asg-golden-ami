@@ -1,0 +1,17 @@
+[Unit]
+Description=Complete the ASG termination lifecycle hook after a graceful drain
+After=network-online.target sample-app.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/sbin/asg-lifecycle-drain
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
